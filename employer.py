@@ -5,7 +5,7 @@ import random
 import re
 from config import CHANNEL_ID
 from wallet import get_wallet_balance, decrease_wallet
-from db import save_ad
+from db import save_ad,get_all_keyword_users
 
 WAITING_FOR_AD_TEXT, WAITING_FOR_CONTACT = range(2)
 
@@ -63,6 +63,9 @@ async def receive_employer_contact(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 
+
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
 async def handle_employer_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     user_id = query.from_user.id
@@ -76,16 +79,53 @@ async def handle_employer_payment(update: Update, context: ContextTypes.DEFAULT_
             ad_text = user_info.get("ad_text", "بدون متن")
             contact = user_info.get("custom_id", "ندارد")
 
-            # ✅ ذخیره در دیتابیس
             save_ad(user_id, "employer", ad_text, contact)
 
-            # ✅ پیام ارسال به کانال
-            channel_message = (
+            # ✅ پیام آگهی
+            message = (
                 "#درخواست_کارفرما\n\n"
                 f"{ad_text}\n\n"
-                f"📞 {contact}"
+                f"🆔 {contact}"
             )
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=channel_message)
+
+            # ✳️ ساخت دکمه با لینک به ربات
+            bot_username = (await context.bot.get_me()).username
+            button = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✉️ ارتباط با کارفرما", url=f"https://t.me/{bot_username}?start=from_channel_{user_id}")
+            ]])
+
+            # 📣 ارسال به کانال همراه با دکمه
+            sent_msg = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=message,
+                reply_markup=button  # ← دکمه ورود به بات
+            )
+
+            # ذخیره اطلاعات آگهی به همراه reply_markup
+            context.bot_data[f"ad_{user_id}"] = {
+                "message_id": sent_msg.message_id,
+                "channel_id": sent_msg.chat_id,
+                "original_text": message,
+                "reply_markup": button,  # ← اضافه کن
+                "role": "employer"
+            }
+
+
+            # ارسال به کاربران دارای کلمات کلیدی
+            from db import get_all_keyword_users
+            user_keywords = get_all_keyword_users()
+            text_to_check = ad_text.lower()
+
+            for uid, keywords in user_keywords.items():
+                if any(kw in text_to_check for kw in keywords):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=uid,
+                            text=message
+                        )
+                    except Exception as e:
+                        print(f"[خطا در ارسال به کاربر {uid}]: {e}")
+
             await query.message.edit_text("✅ پرداخت موفق. آگهی شما در کانال منتشر شد.")
         else:
             await query.message.edit_text("⚠️ مشکلی در کسر موجودی رخ داد. لطفاً دوباره تلاش کنید.")

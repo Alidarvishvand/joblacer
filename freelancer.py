@@ -3,7 +3,7 @@ from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKe
 from telegram.ext import ContextTypes, ConversationHandler
 import re
 import random
-from db import save_ad
+from db import save_ad,get_all_keyword_users
 from config import CHANNEL_ID
 from wallet import get_wallet_balance, decrease_wallet
 # States
@@ -73,10 +73,50 @@ async def handle_freelancer_payment(update: Update, context: ContextTypes.DEFAUL
             ad_text = user_info.get("ad_text", "بدون متن")
             custom_id = user_info.get("custom_id", "❌ آیدی وارد نشده")
 
+            # ذخیره آگهی در دیتابیس
             save_ad(user_id, "freelancer", ad_text, custom_id)
 
+            # متن پیام برای کانال
             message = f"#انجام_دهنده\n\n{ad_text}\n\n🆔 {custom_id}"
-            await context.bot.send_message(chat_id=CHANNEL_ID, text=message)
+
+            # دکمه برای هدایت به ربات
+            bot_username = (await context.bot.get_me()).username
+            button = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✉️ ارتباط با فریلنسر", url=f"https://t.me/{bot_username}?start=from_channel_{user_id}")
+            ]])
+
+            # ارسال آگهی به کانال
+            sent_msg = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=message,
+                reply_markup=button  # ← دکمه ورود به بات
+            )
+
+            # ذخیره اطلاعات آگهی به همراه reply_markup
+            context.bot_data[f"ad_{user_id}"] = {
+                "message_id": sent_msg.message_id,
+                "channel_id": sent_msg.chat_id,
+                "original_text": message,
+                "reply_markup": button,  # ← اضافه کن
+                "role": "freelancer"
+            }
+
+
+            # ارسال آگهی برای کاربران دارای کلمات کلیدی مرتبط
+            from db import get_all_keyword_users
+            user_keywords = get_all_keyword_users()
+            text_to_check = ad_text.lower()
+
+            for uid, keywords in user_keywords.items():
+                if any(kw in text_to_check for kw in keywords):
+                    try:
+                        await context.bot.send_message(
+                            chat_id=uid,
+                            text=f"📢 آگهی جدید مرتبط با مهارت‌های شما:\n\n{ad_text}\n\n🏠 {custom_id}"
+                        )
+                    except Exception as e:
+                        print(f"[خطا در ارسال به کاربر {uid}]: {e}")
+
             await query.edit_message_text("✅ پرداخت انجام شد. آگهی شما منتشر شد.")
         else:
             await query.edit_message_text("❌ خطا در کسر موجودی. لطفاً دوباره تلاش کنید.")

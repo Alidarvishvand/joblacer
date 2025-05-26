@@ -13,10 +13,39 @@ import re
 logging.basicConfig(level=logging.INFO)
 
 # Start command handler
+# Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [["📢 ثبت آگهی"], ["🎯 پنل انجام‌دهندگان", "📂 آگهی من", "🛠 پشتیبانی"], ["💰 کیف پول من"]]
+    from db import save_user
+
+    user = update.effective_user
+    save_user(user.id, user.username or "")
+
+    args = context.args
+
+    # بررسی اینکه آیا کاربر از کانال وارد شده (با لینک start)
+    if args and args[0].startswith("from_channel_"):
+        origin_user_id = args[0].replace("from_channel_", "")
+
+        await update.message.reply_text(
+            f"👋 خوش اومدی!\nاین آگهی توسط کاربر زیر ثبت شده:\n\n"
+            f"🆔 شناسه کاربر: `{origin_user_id}`\n"
+            "برای ارتباط مستقیم می‌تونی آیدی اون شخص رو از داخل آگهی ببینی یا در بات باهاش ارتباط بگیری.",
+            parse_mode="Markdown"
+        )
+
+    # نمایش منوی اصلی
+    keyboard = [
+        ["📢 ثبت آگهی"],
+        ["🎯 پنل انجام‌دهندگان", "📂 آگهی من", "🛠 پشتیبانی"],
+        ["💰 کیف پول من"]
+    ]
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-    await update.message.reply_text("سلام! لطفاً یکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=reply_markup)
+
+    await update.message.reply_text(
+        "سلام! لطفاً یکی از گزینه‌های زیر را انتخاب کنید:",
+        reply_markup=reply_markup
+    )
+
 
 # Handle general messages
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -32,11 +61,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not ads:
             await update.message.reply_text("📂 شما هنوز هیچ آگهی‌ای ثبت نکردید.")
         else:
-            msg = "📋 لیست آگهی‌های شما:\n\n"
             for i, (role, ad_text, contact, created_at) in enumerate(ads, 1):
                 role_label = "کارفرما" if role == "employer" else "انجام‌دهنده"
-                msg += f"🔹 [{role_label}] {created_at}\n📝 {ad_text}\n📞 {contact}\n\n"
-            await update.message.reply_text(msg)
+                msg = (
+                    f"🔹 [{role_label}] {created_at}\n"
+                    f"📝 {ad_text}\n"
+                    f"📞 {contact}"
+                )
+
+                # دکمه بستن پروژه
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ بستن پروژه", callback_data=f"close_ad|{user_id}")]
+                ])
+
+                await update.message.reply_text(msg, reply_markup=keyboard)
+
     elif text == "📢 ثبت آگهی":
         rules_text = (
             "📋 *قوانین ثبت آگهی:*\n"
@@ -53,10 +92,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("لطفاً قوانین را مطالعه کرده و یکی از گزینه‌ها را انتخاب کنید.", reply_markup=ReplyKeyboardRemove())
 
     elif text == "🎯 پنل انجام‌دهندگان":
-        await update.message.reply_text("درحال بارگذاری پنل فریلنسر...")
+        from db import is_user_subscribed
+
+        if is_user_subscribed(update.effective_user.id):
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔑 افزودن کلمات کلیدی", callback_data="add_keywords")],
+                [InlineKeyboardButton("⭐ رتبه‌بندی من", callback_data="view_rating")]
+            ])
+            await update.message.reply_text("🎯 به پنل اختصاصی فریلنسر خوش اومدی!", reply_markup=keyboard)
+        else:
+            await update.message.reply_text(
+                "💼 برای دسترسی به پنل فریلنسر نیاز به اشتراک دارید.\n"
+                "💳 هزینه اشتراک: ۱۷۰٬۰۰۰ تومان برای ۳۰ روز",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 خرید اشتراک", callback_data="buy_freelancer_subscription")]
+                ])
+            )
+
+
 
     elif text == "🛠 پشتیبانی":
-        await update.message.reply_text("با پشتیبانی در تماس باشید: @support")
+        support_message = (
+            "🛠 *پشتیبانی و ارتباط با ما*\n\n"
+            "اگر سوال، مشکل یا پیشنهادی دارید، خوشحال می‌شیم با ما در تماس باشید.\n"
+            "روی دکمه زیر بزنید تا به پشتیبانی پیام بدید 👇"
+        )
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✉️ ارتباط با پشتیبانی", url="https://t.me/roh2p")]
+        ])
+
+        await update.message.reply_text(
+            support_message,
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+
+    
+    
+    
+    elif context.user_data.get("awaiting_keywords"):
+        text = update.message.text
+        keywords = [k.strip() for k in text.lower().split(",") if k.strip()]
+        from db import save_keywords
+        save_keywords(update.effective_user.id, keywords)
+
+        context.user_data["awaiting_keywords"] = False
+        await update.message.reply_text(f"✅ کلمات کلیدی شما با موفقیت ذخیره شد:\n🔑 {', '.join(keywords)}")
+
+
 
     elif text == "💰 کیف پول من":
         create_wallet_if_not_exists(user_id)
@@ -73,6 +157,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
+    
+    
+    
+    
+    elif context.user_data.get("awaiting_keywords"):
+        keywords = [k.strip() for k in update.message.text.lower().split(",") if k.strip()]
+        from db import save_keywords
+        save_keywords(update.effective_user.id, keywords)
+
+        context.user_data["awaiting_keywords"] = False
+        await update.message.reply_text(f"✅ کلمات کلیدی شما با موفقیت ذخیره شد:\n🔑 {', '.join(keywords)}")
+
+    
+    
+    
+    
     elif context.user_data.get("awaiting_receipt"):
         context.user_data["awaiting_receipt"] = False
 
@@ -114,6 +214,107 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ قوانین تایید شد. لطفاً نقش خود را انتخاب کنید:")
         await query.message.reply_text("نقش خود را انتخاب کنید:", reply_markup=reply_markup)
 
+    
+    
+    
+    
+    elif query.data.startswith("close_ad"):
+        _, uid = query.data.split("|")
+        ad_info = context.bot_data.get(f"ad_{uid}")
+
+        if ad_info:
+            original_text = ad_info["original_text"]
+
+            # جایگزینی آیدی با "بسته شد"
+            new_text = re.sub(r"🆔\s*@\S+", "🆔 بسته شد", original_text)
+
+            # ساخت دکمه جدید: "ثبت آگهی در ربات"
+            bot_username = (await context.bot.get_me()).username
+            new_button = InlineKeyboardMarkup([[ 
+                InlineKeyboardButton("📝 ثبت آگهی در ربات", url=f"https://t.me/{bot_username}?start=new_ad")
+            ]])
+
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=ad_info["channel_id"],
+                    message_id=ad_info["message_id"],
+                    text=new_text,
+                    reply_markup=new_button
+                )
+                await query.edit_message_text("✅ پروژه با موفقیت بسته شد.")
+            except Exception as e:
+                print(f"خطا در ویرایش پیام کانال: {e}")
+                await query.edit_message_text("⚠️ خطا در بستن پروژه.")
+        else:
+            await query.edit_message_text("❌ اطلاعات پیام در دسترس نیست.")
+
+
+
+
+
+    
+    elif query.data == "buy_freelancer_subscription":
+        from wallet import decrease_wallet, get_wallet_balance
+        from db import activate_subscription
+
+        balance = get_wallet_balance(user_id)
+        if balance >= 170000:
+            if decrease_wallet(user_id, 170000):
+                activate_subscription(user_id)
+                await query.edit_message_text("✅ اشتراک شما برای مدت یک ماه فعال شد.")
+                await context.bot.send_message(chat_id=user_id, text="🎉 اکنون می‌تونید به پنل انجام‌دهندگان دسترسی داشته باشید.")
+            else:
+                await query.edit_message_text("❌ خطا در کسر موجودی. لطفاً دوباره تلاش کنید.")
+        else:
+            await query.edit_message_text("❌ موجودی کافی نیست. ابتدا کیف پول را شارژ کنید.")
+    
+    
+    elif query.data == "add_keywords":
+        await query.edit_message_text(
+            "📝 لطفاً کلمات کلیدی مهارت‌هات رو (مثلاً: طراحی، برنامه‌نویسی، فتوشاپ) وارد کن، با کاما از هم جدا کن:"
+        )
+        context.user_data["awaiting_keywords"] = True
+
+    elif query.data == "view_rating":
+        # فعلاً نمونه‌ی ساده: رتبه ثابت نشون بده
+        await query.edit_message_text("⭐ رتبه شما: 4.7 از 5\n📊 (این بخش در حال توسعه است)")
+
+    elif query.data == "show_keywords_info":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ افزودن کلمات کلیدی", callback_data="add_keywords")],
+            [InlineKeyboardButton("↩️ برگشت به پنل", callback_data="back_to_freelancer_panel")]
+        ])
+        await query.edit_message_text(
+            "🔑 *تعریف کلمات کلیدی*\n\n"
+            "در هر کدام از آگهی‌ها اگر کلماتی که تعریف کردید موجود باشه، آگهی به پی‌وی شما ارسال میشه.\n\n"
+            "مثال: طراحی، برنامه‌نویسی، وردپرس\n\n"
+            "برای افزودن کلمات کلیدی روی دکمه زیر بزنید 👇",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+
+    elif query.data == "show_rating_info":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 مشاهده رتبه من", callback_data="view_rating")],
+            [InlineKeyboardButton("↩️ برگشت به پنل", callback_data="back_to_freelancer_panel")]
+        ])
+        await query.edit_message_text(
+            "⭐️ *رتبه‌بندی انجام‌دهنده*\n\n"
+            "در صورت بالا بودن رتبه شما، پی‌وی شما به عنوان «انجام‌دهنده برتر» به درخواست‌کنندگان نمایش داده خواهد شد.\n\n"
+            "برای مشاهده رتبه فعلی روی دکمه زیر بزنید 👇",
+            parse_mode="Markdown",
+            reply_markup=keyboard
+        )
+
+    elif query.data == "back_to_freelancer_panel":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔑 تعریف کلمات کلیدی", callback_data="show_keywords_info")],
+            [InlineKeyboardButton("⭐ رتبه‌بندی انجام‌دهنده", callback_data="show_rating_info")]
+        ])
+        await query.edit_message_text("🎯 به پنل فریلنسر برگشتید:", reply_markup=keyboard)
+
+    
+    
     elif query.data == "back_to_menu":
         keyboard = [["📢 ثبت آگهی"], ["🎯 پنل انجام‌دهندگان", "📂 آگهی من", "🛠 پشتیبانی"], ["💰 کیف پول من"]]
         reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
